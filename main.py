@@ -115,6 +115,39 @@ async def health():
         }
 
 
+@app.get("/v1/models")
+async def list_models():
+    """
+    列出可用的模型列表
+    Claude API 兼容接口
+    """
+    from datetime import datetime
+    
+    current_timestamp = int(datetime.now().timestamp())
+    
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": "claude-sonnet-4",
+                "object": "model",
+                "created": current_timestamp,
+                "owned_by": "anthropic",
+                "display_name": "Claude Sonnet 4",
+                "description": "Claude Sonnet 4 - 高性能 AI 模型"
+            },
+            {
+                "id": "claude-sonnet-4.5",
+                "object": "model",
+                "created": current_timestamp,
+                "owned_by": "anthropic",
+                "display_name": "Claude Sonnet 4.5",
+                "description": "Claude Sonnet 4.5 - 最新旗舰 AI 模型"
+            }
+        ]
+    }
+
+
 # ===== 账号管理 API 端点 =====
 
 @app.get("/api/accounts")
