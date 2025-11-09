@@ -6,15 +6,18 @@ import logging
 import httpx
 from typing import Optional
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
+from pydantic import BaseModel
 
-from config import read_global_config, get_config_sync
+from config import read_global_config, get_config_sync, reset_global_config
 from auth import get_auth_headers
 from models import ClaudeRequest
 from converter import convert_claude_to_codewhisperer_request, codewhisperer_request_to_dict
 from stream_handler_new import handle_amazonq_stream
 from message_processor import process_claude_history_for_amazonq, log_history_summary
+from account_manager import get_account_manager
 
 # 配置日志
 logging.basicConfig(
@@ -50,15 +53,49 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# 挂载静态文件目录（如果存在）
+import os
+if os.path.exists("static"):
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+else:
+    logger.warning("static 目录不存在，账号管理前端页面将不可用")
+
+
+# ===== 账号管理 API 数据模型 =====
+class AddAccountRequest(BaseModel):
+    refresh_token: str
+    client_id: str
+    client_secret: str
+    profile_arn: str = ""
+    name: str = ""
+
 
 @app.get("/")
 async def root():
-    """健康检查端点"""
-    return {
-        "status": "ok",
-        "service": "Amazon Q to Claude API Proxy",
-        "version": "1.0.0"
-    }
+    """返回账号管理前端页面"""
+    import os
+    if os.path.exists("static/index.html"):
+        return FileResponse("static/index.html")
+    else:
+        return {
+            "status": "ok",
+            "service": "Amazon Q to Claude API Proxy",
+            "version": "1.0.0",
+            "message": "账号管理前端页面不可用，请访问 /api/accounts 使用 API"
+        }
+
+
+@app.get("/admin")
+async def admin():
+    """账号管理页面"""
+    import os
+    if os.path.exists("static/index.html"):
+        return FileResponse("static/index.html")
+    else:
+        raise HTTPException(
+            status_code=404,
+            detail="账号管理前端页面不可用，请确保 static 目录存在"
+        )
 
 
 @app.get("/health")
@@ -76,6 +113,102 @@ async def health():
             "status": "unhealthy",
             "error": str(e)
         }
+
+
+# ===== 账号管理 API 端点 =====
+
+@app.get("/api/accounts")
+async def get_accounts():
+    """获取所有账号列表"""
+    try:
+        manager = get_account_manager()
+        accounts = manager.get_all_accounts()
+        return JSONResponse(content={"success": True, "data": accounts})
+    except Exception as e:
+        logger.error(f"获取账号列表失败: {e}")
+        return JSONResponse(
+            content={"success": False, "error": str(e)},
+            status_code=500
+        )
+
+
+@app.post("/api/accounts")
+async def add_account(req: AddAccountRequest):
+    """添加新账号"""
+    try:
+        manager = get_account_manager()
+        account = manager.add_account(
+            refresh_token=req.refresh_token,
+            client_id=req.client_id,
+            client_secret=req.client_secret,
+            profile_arn=req.profile_arn if req.profile_arn else None,
+            name=req.name if req.name else None
+        )
+        
+        # 重新加载配置（如果这是第一个账号）
+        reset_global_config()
+        
+        return JSONResponse(content={
+            "success": True,
+            "message": "账号添加成功",
+            "data": {"id": account.id, "name": account.name}
+        })
+    except Exception as e:
+        logger.error(f"添加账号失败: {e}")
+        return JSONResponse(
+            content={"success": False, "error": str(e)},
+            status_code=500
+        )
+
+
+@app.delete("/api/accounts/{account_id}")
+async def delete_account(account_id: str):
+    """删除账号"""
+    try:
+        manager = get_account_manager()
+        success = manager.delete_account(account_id)
+        
+        if not success:
+            return JSONResponse(
+                content={"success": False, "error": "账号不存在"},
+                status_code=404
+            )
+        
+        # 重新加载配置
+        reset_global_config()
+        
+        return JSONResponse(content={"success": True, "message": "账号删除成功"})
+    except Exception as e:
+        logger.error(f"删除账号失败: {e}")
+        return JSONResponse(
+            content={"success": False, "error": str(e)},
+            status_code=500
+        )
+
+
+@app.post("/api/accounts/{account_id}/activate")
+async def activate_account(account_id: str):
+    """激活指定账号"""
+    try:
+        manager = get_account_manager()
+        success = manager.activate_account(account_id)
+        
+        if not success:
+            return JSONResponse(
+                content={"success": False, "error": "账号不存在"},
+                status_code=404
+            )
+        
+        # 重新加载配置
+        reset_global_config()
+        
+        return JSONResponse(content={"success": True, "message": "账号切换成功"})
+    except Exception as e:
+        logger.error(f"激活账号失败: {e}")
+        return JSONResponse(
+            content={"success": False, "error": str(e)},
+            status_code=500
+        )
 
 
 @app.post("/v1/messages")

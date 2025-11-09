@@ -23,6 +23,9 @@ RUN pip install --no-cache-dir \
 # 复制应用代码
 COPY *.py .
 
+# 复制静态文件目录
+COPY static ./static
+
 # 创建非 root 用户
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser

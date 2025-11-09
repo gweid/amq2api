@@ -42,6 +42,9 @@ htmlcov/
 # Token 缓存
 .amazonq_token_cache.json
 
+# 账号配置（敏感信息）
+account.json
+
 # Docker
 .dockerignore
 

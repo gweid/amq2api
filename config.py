@@ -89,32 +89,53 @@ def _save_token_cache(access_token: str, refresh_token: str, expires_at: datetim
 async def read_global_config() -> GlobalConfig:
     """
     读取全局配置（异步安全）
-    如果配置未初始化，则从环境变量加载
+    如果配置未初始化，则从 account.json 或环境变量加载
     """
     global _global_config
 
     async with _config_lock:
         if _global_config is None:
-            # 从环境变量初始化配置
-            zero_token_models = os.getenv("ZERO_INPUT_TOKEN_MODELS", "haiku")
-            _global_config = GlobalConfig(
-                refresh_token=os.getenv("AMAZONQ_REFRESH_TOKEN", ""),
-                client_id=os.getenv("AMAZONQ_CLIENT_ID", ""),
-                client_secret=os.getenv("AMAZONQ_CLIENT_SECRET", ""),
-                profile_arn=os.getenv("AMAZONQ_PROFILE_ARN") or None,
-                api_endpoint=os.getenv("AMAZONQ_API_ENDPOINT", "https://q.us-east-1.amazonaws.com/"),
-                token_endpoint=os.getenv("AMAZONQ_TOKEN_ENDPOINT", "https://oidc.us-east-1.amazonaws.com/token"),
-                port=int(os.getenv("PORT", "3015")),
-                zero_input_token_models=[m.strip() for m in zero_token_models.split(",")]
-            )
+            # 优先从 account.json 读取账号信息
+            from account_manager import get_account_manager
+            account_manager = get_account_manager()
+            active_account = account_manager.get_active_account()
+            
+            if active_account:
+                # 从账号管理器加载配置
+                print(f"从 account.json 加载账号: {active_account.name}")
+                zero_token_models = os.getenv("ZERO_INPUT_TOKEN_MODELS", "haiku")
+                _global_config = GlobalConfig(
+                    refresh_token=active_account.refresh_token,
+                    client_id=active_account.client_id,
+                    client_secret=active_account.client_secret,
+                    profile_arn=active_account.profile_arn,
+                    api_endpoint=os.getenv("AMAZONQ_API_ENDPOINT", "https://q.us-east-1.amazonaws.com/"),
+                    token_endpoint=os.getenv("AMAZONQ_TOKEN_ENDPOINT", "https://oidc.us-east-1.amazonaws.com/token"),
+                    port=int(os.getenv("PORT", "3015")),
+                    zero_input_token_models=[m.strip() for m in zero_token_models.split(",")]
+                )
+            else:
+                # 如果 account.json 中没有账号，尝试从环境变量加载（兼容旧版）
+                print("account.json 中没有账号，尝试从环境变量加载")
+                zero_token_models = os.getenv("ZERO_INPUT_TOKEN_MODELS", "haiku")
+                _global_config = GlobalConfig(
+                    refresh_token=os.getenv("AMAZONQ_REFRESH_TOKEN", ""),
+                    client_id=os.getenv("AMAZONQ_CLIENT_ID", ""),
+                    client_secret=os.getenv("AMAZONQ_CLIENT_SECRET", ""),
+                    profile_arn=os.getenv("AMAZONQ_PROFILE_ARN") or None,
+                    api_endpoint=os.getenv("AMAZONQ_API_ENDPOINT", "https://q.us-east-1.amazonaws.com/"),
+                    token_endpoint=os.getenv("AMAZONQ_TOKEN_ENDPOINT", "https://oidc.us-east-1.amazonaws.com/token"),
+                    port=int(os.getenv("PORT", "3015")),
+                    zero_input_token_models=[m.strip() for m in zero_token_models.split(",")]
+                )
 
             # 验证必需的配置项
             if not _global_config.refresh_token:
-                raise ValueError("AMAZONQ_REFRESH_TOKEN 未设置")
+                raise ValueError("未找到有效的账号配置，请在前端添加账号或在 .env 中设置 AMAZONQ_REFRESH_TOKEN")
             if not _global_config.client_id:
-                raise ValueError("AMAZONQ_CLIENT_ID 未设置")
+                raise ValueError("未找到有效的账号配置，请在前端添加账号或在 .env 中设置 AMAZONQ_CLIENT_ID")
             if not _global_config.client_secret:
-                raise ValueError("AMAZONQ_CLIENT_SECRET 未设置")
+                raise ValueError("未找到有效的账号配置，请在前端添加账号或在 .env 中设置 AMAZONQ_CLIENT_SECRET")
 
             # 尝试从缓存加载 token
             cache = _load_token_cache()
@@ -173,3 +194,13 @@ def get_config_sync() -> GlobalConfig:
     if _global_config is None:
         raise RuntimeError("配置未初始化，请先调用 read_global_config()")
     return _global_config
+
+
+def reset_global_config() -> None:
+    """
+    重置全局配置缓存
+    用于账号切换时强制重新加载配置
+    """
+    global _global_config
+    _global_config = None
+    print("全局配置已重置")
