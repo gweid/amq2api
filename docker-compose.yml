@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  amq2api:
+    build: .
+    container_name: amq2api
+    ports:
+      - "${PORT:-3015}:3015"
+    environment:
+      - AMAZONQ_REFRESH_TOKEN=${AMAZONQ_REFRESH_TOKEN}
+      - AMAZONQ_CLIENT_ID=${AMAZONQ_CLIENT_ID}
+      - AMAZONQ_CLIENT_SECRET=${AMAZONQ_CLIENT_SECRET}
+      - AMAZONQ_PROFILE_ARN=${AMAZONQ_PROFILE_ARN}
+      - PORT=${PORT:-3015}
+      - AMAZONQ_API_ENDPOINT=${AMAZONQ_API_ENDPOINT:-https://q.us-east-1.amazonaws.com/}
+      - AMAZONQ_TOKEN_ENDPOINT=${AMAZONQ_TOKEN_ENDPOINT:-https://oidc.us-east-1.amazonaws.com/token}
+    volumes:
+      - token_cache:/home/appuser
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3015/health')"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  token_cache:
