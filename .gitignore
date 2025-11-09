@@ -44,3 +44,5 @@ htmlcov/
 
 # Docker
 .dockerignore
+
+test.json
