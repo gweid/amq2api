@@ -185,6 +185,8 @@
             height: 100%;
             background-color: rgba(0, 0, 0, 0.5);
             animation: fadeIn 0.3s;
+            overflow-y: auto;
+            padding: 20px 0;
         }
 
         @keyframes fadeIn {
@@ -194,13 +196,16 @@
 
         .modal-content {
             background-color: white;
-            margin: 5% auto;
+            margin: 20px auto;
             padding: 30px;
             border-radius: 12px;
             width: 90%;
             max-width: 600px;
+            max-height: calc(100vh - 80px);
+            overflow-y: auto;
             box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
             animation: slideDown 0.3s;
+            position: relative;
         }
 
         @keyframes slideDown {
@@ -371,31 +376,26 @@
                 <div class="form-group">
                     <label for="accountName">账号名称 <small style="color: #999;">(可选)</small></label>
                     <input type="text" id="accountName" placeholder="例如: 我的主账号">
-                    <small>为账号设置一个便于识别的名称</small>
                 </div>
 
                 <div class="form-group">
                     <label for="refreshToken">Refresh Token <span style="color: red;">*</span></label>
                     <textarea id="refreshToken" required placeholder="输入您的 Amazon Q Refresh Token"></textarea>
-                    <small>必填项 - 用于刷新访问令牌</small>
                 </div>
 
                 <div class="form-group">
                     <label for="clientId">Client ID <span style="color: red;">*</span></label>
                     <input type="text" id="clientId" required placeholder="输入 Client ID">
-                    <small>必填项 - 客户端标识符</small>
                 </div>
 
                 <div class="form-group">
                     <label for="clientSecret">Client Secret <span style="color: red;">*</span></label>
                     <input type="password" id="clientSecret" required placeholder="输入 Client Secret">
-                    <small>必填项 - 客户端密钥</small>
                 </div>
 
                 <div class="form-group">
                     <label for="profileArn">Profile ARN <small style="color: #999;">(可选)</small></label>
-                    <input type="text" id="profileArn" placeholder="输入 Profile ARN (组织账号需要)">
-                    <small>选填项 - 仅组织账号需要填写</small>
+                    <input type="text" id="profileArn" placeholder="组织账号需要">
                 </div>
 
                 <div class="form-actions">
