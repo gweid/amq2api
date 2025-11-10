@@ -5,6 +5,7 @@
 ## 功能特性
 
 - ✅ 完整的 Claude API 兼容接口
+- ✅ **OpenAI API 兼容接口**（新增）
 - ✅ **Web 界面账号管理**（新增）
 - ✅ 多账号支持和快速切换
 - ✅ **后台自动刷新 Token**（新增）
@@ -39,6 +40,19 @@ Amazon Q Event Stream → event_stream_parser.py → parser.py → stream_handle
 - **stream_handler_new.py** - 流式响应处理和事件生成
 - **message_processor.py** - 历史消息合并,确保 user-assistant 交替
 - **models.py** - 数据结构定义
+
+## API 兼容性
+
+本服务同时支持两种 API 格式：
+
+1. **Claude API 格式** - 端点：`/v1/messages`
+   - 完全兼容 Anthropic Claude API
+   - 支持工具调用、多轮对话等高级功能
+
+2. **OpenAI API 格式** - 端点：`/v1/chat/completions`（新增）
+   - 兼容 OpenAI ChatGPT API
+   - 可直接用于支持 OpenAI 格式的应用
+   - 自动将请求转换为 Claude 格式
 
 ## 快速开始
 
@@ -146,6 +160,69 @@ PORT=3015
 ## API 接口
 
 ### Claude API 兼容接口
+
+#### POST /v1/chat/completions
+
+OpenAI 兼容的聊天接口（新增）
+
+**请求体：**
+
+```json
+{
+  "model": "claude-sonnet-4.5",
+  "messages": [
+    {
+      "role": "system",
+      "content": "你是一个有帮助的助手"
+    },
+    {
+      "role": "user",
+      "content": "你好"
+    }
+  ],
+  "max_tokens": 4096,
+  "temperature": 0.7,
+  "stream": true
+}
+```
+
+**流式响应：**
+
+```
+data: {"id":"chatcmpl-xxx","object":"chat.completion.chunk","created":1731158400,"model":"claude-sonnet-4.5","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-xxx","object":"chat.completion.chunk","created":1731158400,"model":"claude-sonnet-4.5","choices":[{"index":0,"delta":{"content":"你好"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-xxx","object":"chat.completion.chunk","created":1731158400,"model":"claude-sonnet-4.5","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+```
+
+**非流式响应：**
+
+```json
+{
+  "id": "chatcmpl-xxx",
+  "object": "chat.completion",
+  "created": 1731158400,
+  "model": "claude-sonnet-4.5",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "你好！我是 AI 助手..."
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 0,
+    "completion_tokens": 0,
+    "total_tokens": 0
+  }
+}
+```
 
 #### POST /v1/messages
 
@@ -291,7 +368,7 @@ curl http://localhost:3015/health
 # 获取模型列表
 curl http://localhost:3015/v1/models
 
-# 发送消息
+# 使用 Claude API 格式发送消息
 curl -X POST http://localhost:3015/v1/messages \
   -H "Content-Type: application/json" \
   -d '{
@@ -303,6 +380,20 @@ curl -X POST http://localhost:3015/v1/messages \
       }
     ],
     "max_tokens": 1024,
+    "stream": true
+  }'
+
+# 使用 OpenAI API 格式发送消息（新增）
+curl -X POST http://localhost:3015/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-sonnet-4.5",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hello, how are you?"
+      }
+    ],
     "stream": true
   }'
 ```
@@ -370,6 +461,71 @@ Docker 部署时会自动挂载：
 - Token 缓存目录
 
 数据会保存在宿主机，重启容器不会丢失。
+
+## 使用示例
+
+### 在各种应用中使用
+
+#### ChatGPT Next Web / ChatBox 等应用
+
+由于这些应用通常使用 OpenAI API 格式，可以直接配置：
+
+```
+API 地址: http://localhost:3015/v1
+API Key: 任意字符串（如果不需要认证）
+模型: claude-sonnet-4.5 或 claude-sonnet-4
+```
+
+#### Python OpenAI SDK
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:3015/v1",
+    api_key="dummy-key"  # 可以是任意值
+)
+
+response = client.chat.completions.create(
+    model="claude-sonnet-4.5",
+    messages=[
+        {"role": "system", "content": "你是一个有帮助的助手"},
+        {"role": "user", "content": "你好"}
+    ],
+    stream=True
+)
+
+for chunk in response:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="")
+```
+
+#### curl 测试
+
+```bash
+# OpenAI 格式（推荐用于简单对话）
+curl -X POST http://localhost:3015/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-sonnet-4.5",
+    "messages": [
+      {"role": "user", "content": "Hello"}
+    ],
+    "stream": true
+  }'
+
+# Claude 格式（支持高级功能）
+curl -X POST http://localhost:3015/v1/messages \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-sonnet-4.5",
+    "messages": [
+      {"role": "user", "content": "Hello"}
+    ],
+    "max_tokens": 1024,
+    "stream": true
+  }'
+```
 
 ## 工作流程
 
@@ -513,12 +669,15 @@ MIT License
 ## 更新日志
 
 ### v2.1.0 (最新)
+- ✨ 新增 OpenAI 兼容接口 `/v1/chat/completions`
 - ✨ 新增后台自动刷新 Token 线程
 - ✨ 新增手动刷新 Token 接口 `/v2/accounts/{account_id}/refresh`
+- ✨ 新增一键刷新所有账号功能
 - ✨ 账号显示刷新状态和最后刷新时间
-- ✨ 前端添加刷新按钮
+- ✨ 前端添加刷新按钮和一键刷新按钮
 - 🎨 账号卡片布局改为一行两个
 - 🎨 Refresh Token 显示优化（前10位...后4位）
+- 🎨 页面提示改为顶部居中 Toast 显示
 - 📝 完善文档说明
 
 ### v2.0.0

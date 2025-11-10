@@ -6,7 +6,9 @@ import logging
 import httpx
 import threading
 import time
-from typing import Optional
+import uuid
+import json
+from typing import Optional, Generator
 from datetime import datetime, timedelta
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
@@ -16,7 +18,7 @@ from pydantic import BaseModel
 
 from config import read_global_config, get_config_sync, reset_global_config
 from auth import get_auth_headers, refresh_token
-from models import ClaudeRequest
+from models import ClaudeRequest, ClaudeMessage
 from converter import convert_claude_to_codewhisperer_request, codewhisperer_request_to_dict
 from stream_handler_new import handle_amazonq_stream
 from message_processor import process_claude_history_for_amazonq, log_history_summary
@@ -148,6 +150,19 @@ class AddAccountRequest(BaseModel):
     client_secret: str
     profile_arn: str = ""
     name: str = ""
+
+
+# ===== OpenAI 兼容 API 数据模型 =====
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+class ChatCompletionRequest(BaseModel):
+    model: Optional[str] = "claude-sonnet-4.5"
+    messages: list[ChatMessage]
+    stream: Optional[bool] = True
+    max_tokens: Optional[int] = 4096
+    temperature: Optional[float] = None
 
 
 @app.get("/")
@@ -417,6 +432,259 @@ async def refresh_account_token(account_id: str):
             content={"success": False, "error": str(e)},
             status_code=500
         )
+
+
+#  ===== OpenAI 兼容接口 =====
+
+def _openai_sse_format(obj: dict) -> str:
+    """OpenAI SSE 格式化"""
+    return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
+
+
+def _openai_non_streaming_response(text: str, model: str) -> dict:
+    """OpenAI 非流式响应格式"""
+    created = int(time.time())
+    return {
+        "id": f"chatcmpl-{uuid.uuid4()}",
+        "object": "chat.completion",
+        "created": created,
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": text,
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        },
+    }
+
+
+@app.post("/v1/chat/completions")
+async def chat_completions(req: ChatCompletionRequest):
+    """
+    OpenAI 兼容的聊天接口
+    将 OpenAI 格式转换为 Claude 格式，然后调用 Amazon Q
+    """
+    try:
+        # 将 OpenAI 格式的消息转换为 Claude 格式
+        claude_messages = []
+        system_message = None
+        
+        for msg in req.messages:
+            if msg.role == "system":
+                system_message = msg.content
+            else:
+                claude_messages.append(ClaudeMessage(
+                    role=msg.role,
+                    content=msg.content
+                ))
+        
+        # 构建 Claude 请求
+        claude_req = ClaudeRequest(
+            model=req.model or "claude-sonnet-4.5",
+            messages=claude_messages,
+            max_tokens=req.max_tokens or 4096,
+            temperature=req.temperature,
+            stream=req.stream if req.stream is not None else True,
+            system=system_message
+        )
+        
+        # 获取配置和认证
+        config = await read_global_config()
+        codewhisperer_req = convert_claude_to_codewhisperer_request(
+            claude_req,
+            conversation_id=None,
+            profile_arn=config.profile_arn
+        )
+        
+        codewhisperer_dict = codewhisperer_request_to_dict(codewhisperer_req)
+        model = claude_req.model
+        
+        # 获取认证头
+        base_auth_headers = await get_auth_headers()
+        
+        # 构建请求头
+        auth_headers = {
+            **base_auth_headers,
+            "Content-Type": "application/x-amz-json-1.0",
+            "X-Amz-Target": "AmazonCodeWhispererStreamingService.GenerateAssistantResponse",
+            "User-Agent": "aws-sdk-rust/1.3.9 ua/2.1 api/codewhispererstreaming/0.1.11582 os/macos lang/rust/1.87.0 md/appVersion-1.19.3 app/AmazonQ-For-CLI",
+            "X-Amz-User-Agent": "aws-sdk-rust/1.3.9 ua/2.1 api/codewhispererstreaming/0.1.11582 os/macos lang/rust/1.87.0 m/F app/AmazonQ-For-CLI",
+            "X-Amzn-Codewhisperer-Optout": "true",
+            "Amz-Sdk-Request": "attempt=1; max=3",
+            "Amz-Sdk-Invocation-Id": str(uuid.uuid4()),
+            "Accept": "*/*",
+            "Accept-Encoding": "gzip, deflate, br"
+        }
+        
+        api_url = config.api_endpoint.rstrip('/')
+        
+        # 判断是否流式响应
+        do_stream = req.stream if req.stream is not None else True
+        
+        if not do_stream:
+            # 非流式响应
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                response = await client.post(
+                    api_url,
+                    json=codewhisperer_dict,
+                    headers=auth_headers
+                )
+                
+                if response.status_code != 200:
+                    error_text = await response.aread()
+                    logger.error(f"上游 API 错误: {response.status_code} {error_text}")
+                    raise HTTPException(
+                        status_code=response.status_code,
+                        detail=f"上游 API 错误: {error_text.decode()}"
+                    )
+                
+                # 收集完整响应
+                full_text = ""
+                async for chunk in response.aiter_bytes():
+                    if chunk:
+                        # 解析事件流获取文本内容
+                        # 这里简化处理，实际应该解析 event stream
+                        pass
+                
+                return JSONResponse(content=_openai_non_streaming_response(full_text, model))
+        
+        else:
+            # 流式响应 - 转换为 OpenAI 格式
+            created = int(time.time())
+            stream_id = f"chatcmpl-{uuid.uuid4()}"
+            
+            async def byte_stream():
+                async with httpx.AsyncClient(timeout=300.0) as client:
+                    async with client.stream(
+                        "POST",
+                        api_url,
+                        json=codewhisperer_dict,
+                        headers=auth_headers
+                    ) as response:
+                        if response.status_code != 200:
+                            error_text = await response.aread()
+                            logger.error(f"上游 API 错误: {response.status_code} {error_text}")
+                            raise HTTPException(
+                                status_code=response.status_code,
+                                detail=f"上游 API 错误: {error_text.decode()}"
+                            )
+                        
+                        async for chunk in response.aiter_bytes():
+                            if chunk:
+                                yield chunk
+            
+            async def openai_stream():
+                """将 Amazon Q 流转换为 OpenAI 格式"""
+                role_sent = False
+                
+                # 处理内容流
+                async for event_block in handle_amazonq_stream(byte_stream(), model=model, request_data=req.model_dump()):
+                    # event_block 是完整的 SSE 事件块，格式：
+                    # event: content_block_delta\n
+                    # data: {...}\n
+                    # \n
+                    
+                    # 按行分割
+                    lines = event_block.split('\n')
+                    event_type_line = None
+                    data_line = None
+                    
+                    for line in lines:
+                        if line.startswith("event: "):
+                            event_type_line = line[7:].strip()
+                        elif line.startswith("data: "):
+                            data_line = line[6:].strip()
+                    
+                    # 如果没有数据行，跳过
+                    if not data_line:
+                        continue
+                    
+                    try:
+                        event_data = json.loads(data_line)
+                        event_type = event_data.get("type")
+                        
+                        logger.info(f"[OpenAI] 处理事件类型: {event_type}")
+                        
+                        # 第一次发送 role
+                        if not role_sent:
+                            openai_event = _openai_sse_format({
+                                "id": stream_id,
+                                "object": "chat.completion.chunk",
+                                "created": created,
+                                "model": model,
+                                "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+                            })
+                            logger.info(f"[OpenAI] 发送 role 事件")
+                            yield openai_event
+                            role_sent = True
+                        
+                        # 提取文本内容
+                        if event_type == "content_block_delta":
+                            delta = event_data.get("delta", {})
+                            text = delta.get("text", "")
+                            if text:
+                                openai_event = _openai_sse_format({
+                                    "id": stream_id,
+                                    "object": "chat.completion.chunk",
+                                    "created": created,
+                                    "model": model,
+                                    "choices": [{
+                                        "index": 0,
+                                        "delta": {"content": text},
+                                        "finish_reason": None
+                                    }],
+                                })
+                                logger.info(f"[OpenAI] 发送文本块: {text[:50]}")
+                                yield openai_event
+                        
+                        elif event_type == "message_stop":
+                            # 发送结束标记
+                            openai_event = _openai_sse_format({
+                                "id": stream_id,
+                                "object": "chat.completion.chunk",
+                                "created": created,
+                                "model": model,
+                                "choices": [{
+                                    "index": 0,
+                                    "delta": {},
+                                    "finish_reason": "stop"
+                                }],
+                            })
+                            logger.info(f"[OpenAI] 发送结束事件")
+                            yield openai_event
+                    
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"JSON 解析失败: {data_line[:100] if data_line else 'empty'}, error: {e}")
+                        continue
+                
+                # 发送 [DONE]
+                logger.info(f"[OpenAI] 发送 [DONE]")
+                yield "data: [DONE]\n\n"
+            
+            return StreamingResponse(
+                openai_stream(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no"
+                }
+            )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"OpenAI 聊天接口错误: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"内部服务器错误: {str(e)}")
 
 
 @app.post("/v2/accounts/refresh-all")
