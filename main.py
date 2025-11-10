@@ -4,7 +4,10 @@ FastAPI 服务器，提供 Claude API 兼容的接口
 """
 import logging
 import httpx
+import threading
+import time
 from typing import Optional
+from datetime import datetime, timedelta
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -12,7 +15,7 @@ from contextlib import asynccontextmanager
 from pydantic import BaseModel
 
 from config import read_global_config, get_config_sync, reset_global_config
-from auth import get_auth_headers
+from auth import get_auth_headers, refresh_token
 from models import ClaudeRequest
 from converter import convert_claude_to_codewhisperer_request, codewhisperer_request_to_dict
 from stream_handler_new import handle_amazonq_stream
@@ -27,6 +30,78 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# ===== 后台定时刷新 Token 线程 =====
+def _background_token_refresh():
+    """后台线程：定时检查并刷新即将过期的 token"""
+    logger.info("后台 token 刷新线程已启动")
+    while True:
+        try:
+            time.sleep(300)  # 每5分钟检查一次
+            logger.info("开始检查需要刷新的账号...")
+            
+            manager = get_account_manager()
+            accounts = manager.accounts
+            now = datetime.now()
+            
+            for account in accounts:
+                try:
+                    # 检查是否需要刷新（25分钟未刷新的账号）
+                    should_refresh = False
+                    
+                    if not account.last_refresh_time:
+                        should_refresh = True
+                        logger.info(f"账号 {account.name} 从未刷新过，准备刷新")
+                    else:
+                        last_refresh = datetime.fromisoformat(account.last_refresh_time)
+                        time_since_refresh = (now - last_refresh).total_seconds()
+                        if time_since_refresh > 1500:  # 25分钟
+                            should_refresh = True
+                            logger.info(f"账号 {account.name} 已 {time_since_refresh/60:.1f} 分钟未刷新，准备刷新")
+                    
+                    if should_refresh:
+                        # 临时激活该账号进行刷新
+                        old_active = None
+                        for acc in manager.accounts:
+                            if acc.is_active:
+                                old_active = acc
+                                acc.is_active = False
+                        
+                        account.is_active = True
+                        reset_global_config()
+                        
+                        # 执行刷新
+                        logger.info(f"正在刷新账号: {account.name}")
+                        import asyncio
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        try:
+                            loop.run_until_complete(refresh_token())
+                            manager.update_refresh_status(account.id, "success")
+                            logger.info(f"账号 {account.name} 刷新成功")
+                        except Exception as e:
+                            manager.update_refresh_status(account.id, "failed")
+                            logger.error(f"账号 {account.name} 刷新失败: {e}")
+                        finally:
+                            loop.close()
+                        
+                        # 恢复原来的激活状态
+                        account.is_active = False
+                        if old_active:
+                            old_active.is_active = True
+                        reset_global_config()
+                        
+                        time.sleep(2)  # 每个账号之间间隔2秒
+                        
+                except Exception as e:
+                    logger.error(f"处理账号 {account.name} 时出错: {e}")
+                    continue
+            
+            logger.info("本轮刷新检查完成")
+            
+        except Exception as e:
+            logger.error(f"后台刷新线程出错: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
@@ -38,6 +113,11 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"配置初始化失败: {e}")
         raise
+    
+    # 启动后台刷新线程
+    refresh_thread = threading.Thread(target=_background_token_refresh, daemon=True)
+    refresh_thread.start()
+    logger.info("后台 token 刷新线程已启动")
 
     yield
 
@@ -238,6 +318,216 @@ async def activate_account(account_id: str):
         return JSONResponse(content={"success": True, "message": "账号切换成功"})
     except Exception as e:
         logger.error(f"激活账号失败: {e}")
+        return JSONResponse(
+            content={"success": False, "error": str(e)},
+            status_code=500
+        )
+
+
+@app.post("/v2/accounts/{account_id}/refresh")
+async def refresh_account_token(account_id: str):
+    """
+    手动刷新指定账号的 Token
+    参考 amazonq2api 项目实现
+    """
+    try:
+        manager = get_account_manager()
+        account = manager.get_account_by_id(account_id)
+        
+        if not account:
+            return JSONResponse(
+                content={"success": False, "error": "账号不存在"},
+                status_code=404
+            )
+        
+        if not account.refresh_token or not account.client_id or not account.client_secret:
+            return JSONResponse(
+                content={"success": False, "error": "账号信息不完整，无法刷新"},
+                status_code=400
+            )
+        
+        logger.info(f"开始手动刷新账号: {account.name}")
+        
+        # 临时激活该账号进行刷新
+        old_active_id = None
+        for acc in manager.accounts:
+            if acc.is_active:
+                old_active_id = acc.id
+                acc.is_active = False
+        
+        account.is_active = True
+        reset_global_config()
+        
+        try:
+            # 执行刷新
+            await refresh_token()
+            
+            # 更新刷新状态
+            manager.update_refresh_status(account.id, "success")
+            
+            # 恢复原来的激活状态
+            account.is_active = False
+            if old_active_id:
+                for acc in manager.accounts:
+                    if acc.id == old_active_id:
+                        acc.is_active = True
+                        break
+            elif old_active_id is None:
+                account.is_active = True  # 如果原来就是激活的，保持激活
+            
+            reset_global_config()
+            
+            logger.info(f"账号 {account.name} 刷新成功")
+            
+            # 重新加载账号信息
+            refreshed_account = manager.get_account_by_id(account_id)
+            return JSONResponse(content={
+                "success": True,
+                "message": "Token 刷新成功",
+                "data": {
+                    "id": refreshed_account.id,
+                    "name": refreshed_account.name,
+                    "last_refresh_time": refreshed_account.last_refresh_time,
+                    "last_refresh_status": refreshed_account.last_refresh_status
+                }
+            })
+            
+        except Exception as e:
+            # 刷新失败，更新状态
+            manager.update_refresh_status(account.id, "failed")
+            
+            # 恢复原来的激活状态
+            account.is_active = False
+            if old_active_id:
+                for acc in manager.accounts:
+                    if acc.id == old_active_id:
+                        acc.is_active = True
+                        break
+            
+            reset_global_config()
+            
+            logger.error(f"账号 {account.name} 刷新失败: {e}")
+            raise
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"刷新账号 Token 失败: {e}")
+        return JSONResponse(
+            content={"success": False, "error": str(e)},
+            status_code=500
+        )
+
+
+@app.post("/v2/accounts/refresh-all")
+async def refresh_all_accounts():
+    """
+    一键刷新所有账号的 Token
+    """
+    try:
+        manager = get_account_manager()
+        accounts = manager.accounts
+        
+        if not accounts:
+            return JSONResponse(
+                content={"success": False, "error": "没有可刷新的账号"},
+                status_code=400
+            )
+        
+        logger.info(f"开始批量刷新 {len(accounts)} 个账号")
+        
+        # 记录原来的激活账号
+        old_active_id = None
+        for acc in accounts:
+            if acc.is_active:
+                old_active_id = acc.id
+                break
+        
+        success_count = 0
+        failed_count = 0
+        results = []
+        
+        for account in accounts:
+            try:
+                if not account.refresh_token or not account.client_id or not account.client_secret:
+                    logger.warning(f"账号 {account.name} 信息不完整，跳过")
+                    failed_count += 1
+                    results.append({
+                        "id": account.id,
+                        "name": account.name,
+                        "status": "skipped",
+                        "error": "账号信息不完整"
+                    })
+                    continue
+                
+                # 临时激活该账号
+                for acc in accounts:
+                    acc.is_active = False
+                account.is_active = True
+                reset_global_config()
+                
+                logger.info(f"正在刷新账号: {account.name}")
+                
+                try:
+                    # 执行刷新
+                    await refresh_token()
+                    manager.update_refresh_status(account.id, "success")
+                    success_count += 1
+                    results.append({
+                        "id": account.id,
+                        "name": account.name,
+                        "status": "success"
+                    })
+                    logger.info(f"账号 {account.name} 刷新成功")
+                except Exception as e:
+                    manager.update_refresh_status(account.id, "failed")
+                    failed_count += 1
+                    results.append({
+                        "id": account.id,
+                        "name": account.name,
+                        "status": "failed",
+                        "error": str(e)
+                    })
+                    logger.error(f"账号 {account.name} 刷新失败: {e}")
+                
+            except Exception as e:
+                logger.error(f"处理账号 {account.name} 时出错: {e}")
+                failed_count += 1
+                results.append({
+                    "id": account.id,
+                    "name": account.name,
+                    "status": "error",
+                    "error": str(e)
+                })
+        
+        # 恢复原来的激活状态
+        for acc in accounts:
+            acc.is_active = False
+        if old_active_id:
+            for acc in accounts:
+                if acc.id == old_active_id:
+                    acc.is_active = True
+                    break
+        elif accounts:
+            accounts[0].is_active = True
+        
+        reset_global_config()
+        
+        logger.info(f"批量刷新完成: 成功 {success_count}/{len(accounts)}, 失败 {failed_count}")
+        
+        return JSONResponse(content={
+            "success": True,
+            "message": f"批量刷新完成",
+            "data": {
+                "total": len(accounts),
+                "success_count": success_count,
+                "failed_count": failed_count,
+                "results": results
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"批量刷新失败: {e}")
         return JSONResponse(
             content={"success": False, "error": str(e)},
             status_code=500

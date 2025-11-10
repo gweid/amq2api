@@ -26,6 +26,8 @@ class Account:
     name: Optional[str] = None  # 账号别名
     is_active: bool = False
     created_at: str = ""
+    last_refresh_time: Optional[str] = None  # 最后刷新时间
+    last_refresh_status: Optional[str] = None  # 最后刷新状态：success/failed
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
@@ -130,7 +132,9 @@ class AccountManager:
             profile_arn=profile_arn,
             name=name or f"账号 {len(self.accounts) + 1}",
             is_active=is_active,
-            created_at=datetime.now().isoformat()
+            created_at=datetime.now().isoformat(),
+            last_refresh_time=None,
+            last_refresh_status=None
         )
         
         self.accounts.append(account)
@@ -138,6 +142,22 @@ class AccountManager:
         
         logger.info(f"成功添加账号: {account.name} (ID: {account.id})")
         return account
+    
+    def update_refresh_status(self, account_id: str, status: str, new_refresh_token: Optional[str] = None) -> bool:
+        """更新账号的刷新状态"""
+        account = self.get_account_by_id(account_id)
+        if not account:
+            return False
+        
+        account.last_refresh_time = datetime.now().isoformat()
+        account.last_refresh_status = status
+        
+        if new_refresh_token:
+            account.refresh_token = new_refresh_token
+        
+        self.save_accounts()
+        logger.info(f"更新账号刷新状态: {account.name} - {status}")
+        return True
     
     def delete_account(self, account_id: str) -> bool:
         """删除账号"""

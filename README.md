@@ -7,6 +7,8 @@
 - ✅ 完整的 Claude API 兼容接口
 - ✅ **Web 界面账号管理**（新增）
 - ✅ 多账号支持和快速切换
+- ✅ **后台自动刷新 Token**（新增）
+- ✅ **手动刷新 Token 接口**（新增）
 - ✅ 自动 Token 刷新机制
 - ✅ SSE 流式响应支持
 - ✅ 请求/响应格式自动转换
@@ -95,7 +97,12 @@ python3 main.py
    - 点击 "切换使用" 按钮
    - 当前使用的账号会显示 "✓ 当前使用" 标记
 
-4. **删除账号**
+4. **刷新账号 Token**
+   - 点击账号的 "🔄 刷新" 按钮
+   - 手动刷新该账号的访问令牌
+   - 刷新状态会实时显示（成功 ✓ / 失败 ✗）
+
+5. **删除账号**
    - 点击账号后的 "删除" 按钮
    - 确认删除操作
 
@@ -241,6 +248,24 @@ PORT=3015
 #### DELETE /api/accounts/{account_id}
 
 删除指定账号
+
+#### POST /v2/accounts/{account_id}/refresh
+
+手动刷新指定账号的 Token
+
+**响应：**
+```json
+{
+  "success": true,
+  "message": "Token 刷新成功",
+  "data": {
+    "id": "account-uuid",
+    "name": "我的账号",
+    "last_refresh_time": "2024-01-01T12:00:00",
+    "last_refresh_status": "success"
+  }
+}
+```
 
 ### 其他接口
 
@@ -400,14 +425,30 @@ Claude API 请求
 
 ### Token 管理
 
-1. **自动刷新**
+1. **后台自动刷新**（新增）
+   - 后台线程每 5 分钟检查一次所有账号
+   - 超过 25 分钟未刷新的账号会自动刷新
+   - 刷新状态会记录到 account.json
+   - 服务启动时自动启动后台刷新线程
+
+2. **手动刷新**（新增）
+   - 通过前端界面点击 "🔄 刷新" 按钮
+   - 通过 API: `POST /v2/accounts/{account_id}/refresh`
+   - 立即刷新指定账号的 Token
+
+3. **自动刷新**
    - access_token 会自动刷新
    - 提前 5 分钟刷新以避免过期
    - refresh_token 如果更新会自动保存
 
-2. **Token 缓存**
+4. **Token 缓存**
    - Token 缓存在 `~/.amazonq_token_cache.json`
    - 重启服务后仍然有效
+
+5. **刷新状态监控**
+   - 每个账号记录最后刷新时间
+   - 显示刷新状态：success / failed
+   - 前端界面实时显示刷新状态
 
 ### 其他
 
@@ -471,7 +512,16 @@ MIT License
 
 ## 更新日志
 
-### v2.0.0 (最新)
+### v2.1.0 (最新)
+- ✨ 新增后台自动刷新 Token 线程
+- ✨ 新增手动刷新 Token 接口 `/v2/accounts/{account_id}/refresh`
+- ✨ 账号显示刷新状态和最后刷新时间
+- ✨ 前端添加刷新按钮
+- 🎨 账号卡片布局改为一行两个
+- 🎨 Refresh Token 显示优化（前10位...后4位）
+- 📝 完善文档说明
+
+### v2.0.0
 - ✨ 新增 Web 界面账号管理
 - ✨ 支持多账号管理和快速切换
 - ✨ 账号数据保存在 `account.json`
