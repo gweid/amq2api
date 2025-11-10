@@ -72,9 +72,13 @@ class AccountManager:
         result = []
         for acc in self.accounts:
             acc_dict = acc.to_dict()
-            # 隐藏敏感信息,只显示部分字符
+            # 隐藏敏感信息,显示前10位...后4位
             if acc_dict['refresh_token']:
-                acc_dict['refresh_token'] = acc_dict['refresh_token'][:10] + '...' if len(acc_dict['refresh_token']) > 10 else '***'
+                token = acc_dict['refresh_token']
+                if len(token) > 14:
+                    acc_dict['refresh_token'] = token[:10] + '...' + token[-4:]
+                else:
+                    acc_dict['refresh_token'] = '***'
             if acc_dict['client_secret']:
                 acc_dict['client_secret'] = '***'
             result.append(acc_dict)

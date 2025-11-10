@@ -106,11 +106,22 @@
             margin-bottom: 20px;
         }
 
+        .accounts-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+        }
+
+        @media (max-width: 768px) {
+            .accounts-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
         .account-card {
             border: 2px solid #e2e8f0;
             border-radius: 10px;
             padding: 20px;
-            margin-bottom: 15px;
             transition: all 0.3s;
             position: relative;
         }
@@ -438,7 +449,7 @@
                 return;
             }
 
-            accountsList.innerHTML = accounts.map(account => `
+            const accountsHTML = accounts.map(account => `
                 <div class="account-card ${account.is_active ? 'active' : ''}">
                     <div class="account-header">
                         <div class="account-name">
@@ -480,6 +491,8 @@
                     </div>
                 </div>
             `).join('');
+
+            accountsList.innerHTML = `<div class="accounts-grid">${accountsHTML}</div>`;
         }
 
         // 格式化日期
