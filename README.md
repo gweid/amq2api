@@ -259,20 +259,22 @@ data: [DONE]
   "object": "list",
   "data": [
     {
+      "id": "claude-3.5-sonnet",
+      "object": "model",
+      "created": 1731158400,
+      "owned_by": "anthropic"
+    },
+    {
       "id": "claude-sonnet-4",
       "object": "model",
       "created": 1731158400,
-      "owned_by": "anthropic",
-      "display_name": "Claude Sonnet 4",
-      "description": "Claude Sonnet 4 - 高性能 AI 模型"
+      "owned_by": "anthropic"
     },
     {
       "id": "claude-sonnet-4.5",
       "object": "model",
       "created": 1731158400,
-      "owned_by": "anthropic",
-      "display_name": "Claude Sonnet 4.5",
-      "description": "Claude Sonnet 4.5 - 最新旗舰 AI 模型"
+      "owned_by": "anthropic"
     }
   ]
 }
@@ -473,7 +475,7 @@ Docker 部署时会自动挂载：
 ```
 API 地址: http://localhost:3015/v1
 API Key: 任意字符串（如果不需要认证）
-模型: claude-sonnet-4.5 或 claude-sonnet-4
+模型: claude-3.5-sonnet / claude-sonnet-4 / claude-sonnet-4.5
 ```
 
 #### Python OpenAI SDK

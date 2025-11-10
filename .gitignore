@@ -49,3 +49,5 @@ account.json
 .dockerignore
 
 test.json
+
+.DS_Store

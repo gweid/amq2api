@@ -224,20 +224,22 @@ async def list_models():
         "object": "list",
         "data": [
             {
+                "id": "claude-3.5-sonnet",
+                "object": "model",
+                "created": current_timestamp,
+                "owned_by": "anthropic"
+            },
+            {
                 "id": "claude-sonnet-4",
                 "object": "model",
                 "created": current_timestamp,
-                "owned_by": "anthropic",
-                "display_name": "Claude Sonnet 4",
-                "description": "Claude Sonnet 4 - 高性能 AI 模型"
+                "owned_by": "anthropic"
             },
             {
                 "id": "claude-sonnet-4.5",
                 "object": "model",
                 "created": current_timestamp,
-                "owned_by": "anthropic",
-                "display_name": "Claude Sonnet 4.5",
-                "description": "Claude Sonnet 4.5 - 最新旗舰 AI 模型"
+                "owned_by": "anthropic"
             }
         ]
     }
