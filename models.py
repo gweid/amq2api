@@ -95,6 +95,7 @@ class UserInputMessage:
     userInputMessageContext: UserInputMessageContext
     origin: str = "CLI"
     modelId: str = "claude-sonnet-4.5"
+    images: Optional[List[Dict[str, Any]]] = None  # 图片列表
 
 
 @dataclass
@@ -250,3 +251,62 @@ def extract_text_from_claude_content(content: ClaudeContent) -> str:
                 text_parts.append(block.get("text", ""))
         return "\n".join(text_parts)
     return ""
+
+
+def extract_images_from_claude_content(content: ClaudeContent) -> Optional[List[Dict[str, Any]]]:
+    """
+    从 Claude 内容中提取图片并转换为 Droid 格式
+
+    Claude 格式:
+    {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": "image/png",
+            "data": "base64_encoded_data"
+        }
+    }
+
+    Droid 格式:
+    {
+        "format": "png",
+        "source": {
+            "bytes": "base64_encoded_data"
+        }
+    }
+    """
+    if not isinstance(content, list):
+        return None
+
+    images = []
+    for block in content:
+        if isinstance(block, ClaudeImageContent):
+            # 处理 ClaudeImageContent 对象
+            source = block.source
+            if source.get("type") == "base64":
+                # 从 media_type 提取格式 (例如: "image/png" -> "png")
+                media_type = source.get("media_type", "image/png")
+                image_format = media_type.split("/")[-1] if "/" in media_type else "png"
+
+                images.append({
+                    "format": image_format,
+                    "source": {
+                        "bytes": source.get("data", "")
+                    }
+                })
+        elif isinstance(block, dict) and block.get("type") == "image":
+            # 处理字典格式的图片块
+            source = block.get("source", {})
+            if source.get("type") == "base64":
+                # 从 media_type 提取格式
+                media_type = source.get("media_type", "image/png")
+                image_format = media_type.split("/")[-1] if "/" in media_type else "png"
+
+                images.append({
+                    "format": image_format,
+                    "source": {
+                        "bytes": source.get("data", "")
+                    }
+                })
+
+    return images if images else None

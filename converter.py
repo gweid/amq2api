@@ -18,7 +18,8 @@ from models import (
     EnvState,
     Tool,
     claude_tool_to_codewhisperer_tool,
-    extract_text_from_claude_content
+    extract_text_from_claude_content,
+    extract_images_from_claude_content
 )
 
 logger = logging.getLogger(__name__)
@@ -103,15 +104,21 @@ def convert_claude_to_codewhisperer_request(
             # 转换工具定义（会自动截断超长描述）
             codewhisperer_tools.append(claude_tool_to_codewhisperer_tool(claude_tool))
 
-    # 步骤 3: 提取最后一条用户消息并处理 tool_results
+    # 步骤 3: 提取最后一条用户消息并处理 tool_results 和 images
     last_message = claude_req.messages[-1] if claude_req.messages else None
     prompt_content = ""
     tool_results = None  # 从当前消息中提取的 tool_results
     has_tool_result = False  # 标记是否包含 tool_result
+    images = None  # 从当前消息中提取的 images
 
     if last_message and last_message.role == "user":
-        # 提取文本内容和 tool_results
+        # 提取文本内容、tool_results 和 images
         content = last_message.content
+
+        # 提取图片
+        images = extract_images_from_claude_content(content)
+        if images:
+            logger.info(f"从当前消息中提取了 {len(images)} 张图片")
         if isinstance(content, list):
             # 解析包含多个内容块的消息
             text_parts = []
@@ -242,11 +249,12 @@ def convert_claude_to_codewhisperer_request(
     # 步骤 6: 获取 modelId 并映射到 Amazon Q 支持的模型
     model_id = map_claude_model_to_amazonq(claude_req.model)
 
-    # 步骤 7: 组装 UserInputMessage
+    # 步骤 7: 组装 UserInputMessage（包含 images）
     user_input_message = UserInputMessage(
         content=formatted_content,
         userInputMessageContext=user_context,
-        modelId=model_id
+        modelId=model_id,
+        images=images  # 添加图片列表
     )
 
     # 步骤 8: 转换历史记录
@@ -285,10 +293,16 @@ def convert_history_messages(messages: List[Any]) -> List[Dict[str, Any]]:
     for message in messages:
         # 根据角色构建不同格式的历史条目
         if message.role == "user":
-            # 处理用户消息（可能包含 tool_result）
+            # 处理用户消息（可能包含 tool_result 和 images）
             content = message.content
             text_content = ""
             tool_results = None
+            images = None
+
+            # 提取图片
+            images = extract_images_from_claude_content(content)
+            if images:
+                logger.info(f"从历史消息中提取了 {len(images)} 张图片")
 
             if isinstance(content, list):
                 # 解析包含多个内容块的消息
@@ -374,12 +388,18 @@ def convert_history_messages(messages: List[Any]) -> List[Dict[str, Any]]:
             if tool_results:
                 user_input_context["toolResults"] = tool_results
 
+            # 构建历史消息条目
+            user_input_msg = {
+                "content": text_content,
+                "userInputMessageContext": user_input_context,
+                "origin": "CLI"
+            }
+            # 如果有图片，添加到消息中
+            if images:
+                user_input_msg["images"] = images
+
             history_entry = {
-                "userInputMessage": {
-                    "content": text_content,
-                    "userInputMessageContext": user_input_context,
-                    "origin": "CLI"
-                }
+                "userInputMessage": user_input_msg
             }
         else:  # assistant
             # 处理助手消息（可能包含 tool_use）
@@ -460,17 +480,25 @@ def codewhisperer_request_to_dict(request: CodeWhispererRequest) -> Dict[str, An
     if tool_results:
         user_input_message_context["toolResults"] = tool_results
 
+    # 构建 userInputMessage
+    user_input_message_dict = {
+        "content": request.conversationState.currentMessage.userInputMessage.content,
+        "userInputMessageContext": user_input_message_context,
+        "origin": request.conversationState.currentMessage.userInputMessage.origin,
+        "modelId": request.conversationState.currentMessage.userInputMessage.modelId
+    }
+
+    # 如果有 images，添加到 userInputMessage 中
+    images = request.conversationState.currentMessage.userInputMessage.images
+    if images:
+        user_input_message_dict["images"] = images
+
     result = {
         "conversationState": {
             "conversationId": request.conversationState.conversationId,
             "history": request.conversationState.history,
             "currentMessage": {
-                "userInputMessage": {
-                    "content": request.conversationState.currentMessage.userInputMessage.content,
-                    "userInputMessageContext": user_input_message_context,
-                    "origin": request.conversationState.currentMessage.userInputMessage.origin,
-                    "modelId": request.conversationState.currentMessage.userInputMessage.modelId
-                }
+                "userInputMessage": user_input_message_dict
             },
             "chatTriggerType": request.conversationState.chatTriggerType
         }

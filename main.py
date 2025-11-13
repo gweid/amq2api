@@ -984,9 +984,12 @@ def parse_claude_request(data: dict) -> ClaudeRequest:
     # 解析消息
     messages = []
     for msg in data.get("messages", []):
+        # 安全地获取 role 和 content，提供默认值
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
         messages.append(ClaudeMessage(
-            role=msg["role"],
-            content=msg["content"]
+            role=role,
+            content=content
         ))
 
     # 解析工具
@@ -994,11 +997,18 @@ def parse_claude_request(data: dict) -> ClaudeRequest:
     if "tools" in data:
         tools = []
         for tool in data["tools"]:
-            tools.append(ClaudeTool(
-                name=tool["name"],
-                description=tool["description"],
-                input_schema=tool["input_schema"]
-            ))
+            # 安全地获取工具字段，提供默认值
+            name = tool.get("name", "")
+            description = tool.get("description", "")
+            input_schema = tool.get("input_schema", {})
+
+            # 只有当 name 不为空时才添加工具
+            if name:
+                tools.append(ClaudeTool(
+                    name=name,
+                    description=description,
+                    input_schema=input_schema
+                ))
 
     return ClaudeRequest(
         model=data.get("model", "claude-sonnet-4.5"),

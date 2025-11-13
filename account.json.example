@@ -1,0 +1,14 @@
+[
+  {
+    "id": "55cfc11b-44d7-4da3-82df-3ff877c98fd4",
+    "refresh_token": "aor....",
+    "client_id": "Vsvw....",
+    "client_secret": "eyJ....Llw",
+    "profile_arn": "",
+    "name": "xxx@gmail.com",
+    "is_active": true,
+    "created_at": "2025-11-10T00:20:10",
+    "last_refresh_time": "2025-11-13T03:26:30.543688",
+    "last_refresh_status": "success"
+  }
+]
